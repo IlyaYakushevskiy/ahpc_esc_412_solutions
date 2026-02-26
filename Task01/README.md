@@ -41,3 +41,5 @@ int main() {
 
 ## Ex5
 
+Minimum coordinates (x, y, z): [-0.49999982 -0.49999982 -0.49999887]
+Maximum coordinates (x, y, z): [0.49999934 0.49999994 0.4999999 ]
