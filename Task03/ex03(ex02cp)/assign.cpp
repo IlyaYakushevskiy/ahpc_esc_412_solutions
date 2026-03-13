@@ -6,6 +6,9 @@
 #include "tipsy.h"
 #include <chrono>
 #include <cmath>
+#include <functional>
+#include <iostream>
+
 
 using namespace blitz;
 
@@ -18,6 +21,9 @@ int main(int argc, char *argv[]) {
 
     int nGrid = 100; //default 
     if (argc>2) nGrid = atoi(argv[2]);
+
+    std::string scheme = "PCS";
+    if (argc>3) scheme = argv[3];
 
     auto start_read = std::chrono::high_resolution_clock::now();
     
@@ -64,67 +70,121 @@ int main(int argc, char *argv[]) {
     auto end_read = std::chrono::high_resolution_clock::now();
     std::chrono::duration<double> time_read = end_read - start_read;
     auto start_mass = std::chrono::high_resolution_clock::now();
-    // Create Mass Assignment Grid
+    
     Array<float,3> grid(nGrid,nGrid,nGrid);
-
     grid = 0;
 
 
-    //PCS (piece-wise cubic spline)
-
-    auto calc_W_PCS = [](float s) -> float {
+    auto calc_NGP = [](float s) { return (std::abs(s) < 0.5f) ? 1.0f : 0.0f; };
+    auto calc_CIC = [](float s) { return (std::abs(s) < 1.0f) ? (1.0f - std::abs(s)) : 0.0f; };
+    auto calc_TSC = [](float s) {
         float abs_s = std::abs(s);
-        if (abs_s < 1.0f) {
-            return (1.0f / 6.0f) * (4.0f - 6.0f * abs_s * abs_s + 3.0f * std::pow(abs_s, 3.0f));
-        } else if (abs_s < 2.0f) {
-            return (1.0f / 6.0f) * std::pow(2.0f - abs_s, 3.0f);
-        } else {
-            return 0.0f;
-        }
+        if (abs_s < 0.5f) return 0.75f - abs_s * abs_s;
+        if (abs_s < 1.5f) return 0.5f * std::pow(1.5f - abs_s, 2.0f);
+        return 0.0f;
     };
 
+    auto calc_PCS = [](float s) {
+        float abs_s = std::abs(s);
+        if (abs_s < 1.0f) return (1.0f / 6.0f) * (4.0f - 6.0f * abs_s * abs_s + 3.0f * std::pow(abs_s, 3.0f));
+        if (abs_s < 2.0f) return (1.0f / 6.0f) * std::pow(2.0f - abs_s, 3.0f);
+        return 0.0f;
+    };
 
-    for(int pn=0; pn<N; ++pn) {
-        float x = r(pn,0);
-        float y = r(pn,1);
-        float z = r(pn,2);
+    
+    if (scheme == "NGP") {
+        #pragma omp parallel for
+        for(int pn=0; pn<N; ++pn) {
+            float rx = (r(pn,0) + 0.5f) * nGrid;
+            float ry = (r(pn,1) + 0.5f) * nGrid;
+            float rz = (r(pn,2) + 0.5f) * nGrid;
+            int istart = std::floor(rx - 0.0f);
+            int jstart = std::floor(ry - 0.0f);
+            int kstart = std::floor(rz - 0.0f);
 
-        // transform to continuous grid coordinates
-        float rx = (x + 0.5f) * nGrid;
-        float ry = (y + 0.5f) * nGrid;
-        float rz = (z + 0.5f) * nGrid;
+            for (int i = istart; i < istart + 1; ++i) {
+                for (int j = jstart; j < jstart + 1; ++j) {
+                    for (int k = kstart; k < kstart + 1; ++k) {
+                        float W = calc_NGP((i + 0.5f) - rx) * calc_NGP((j + 0.5f) - ry) * calc_NGP((k + 0.5f) - rz);
+                        int iw = (i % nGrid + nGrid) % nGrid, jw = (j % nGrid + nGrid) % nGrid, kw = (k % nGrid + nGrid) % nGrid;
+                        #pragma omp atomic
+                        grid(iw, jw, kw) += m(pn) * W;
+                    }
+                }
+            }
+        }
+    } 
+    else if (scheme == "CIC") {
+        #pragma omp parallel for
+        for(int pn=0; pn<N; ++pn) {
+            float rx = (r(pn,0) + 0.5f) * nGrid;
+            float ry = (r(pn,1) + 0.5f) * nGrid;
+            float rz = (r(pn,2) + 0.5f) * nGrid;
+            int istart = std::floor(rx - 0.5f);
+            int jstart = std::floor(ry - 0.5f);
+            int kstart = std::floor(rz - 0.5f);
 
-        int istart = std::floor(rx - 1.5f);
-        int jstart = std::floor(ry - 1.5f);
-        int kstart = std::floor(rz - 1.5f);
-
-        for (int i = istart; i < istart + 4; ++i) {
-            for (int j = jstart; j < jstart + 4; ++j) {
-                for (int k = kstart; k < kstart + 4; ++k) {
-                    
-                    float icenter = i + 0.5f;
-                    float jcenter = j + 0.5f;
-                    float kcenter = k + 0.5f;
-                    
-                    float sx = icenter - rx;
-                    float sy = jcenter - ry;
-                    float sz = kcenter - rz;
-
-                    float Wx = calc_W_PCS(sx);
-                    float Wy = calc_W_PCS(sy);
-                    float Wz = calc_W_PCS(sz);
-                    float W = Wx * Wy * Wz;
-
-                    //PBC z/nz
-                    int i_wrap = (i % nGrid + nGrid) % nGrid;
-                    int j_wrap = (j % nGrid + nGrid) % nGrid;
-                    int k_wrap = (k % nGrid + nGrid) % nGrid;
-
-                    grid(i_wrap, j_wrap, k_wrap) += m(pn) * W;
+            for (int i = istart; i < istart + 2; ++i) {
+                for (int j = jstart; j < jstart + 2; ++j) {
+                    for (int k = kstart; k < kstart + 2; ++k) {
+                        float W = calc_CIC((i + 0.5f) - rx) * calc_CIC((j + 0.5f) - ry) * calc_CIC((k + 0.5f) - rz);
+                        int iw = (i % nGrid + nGrid) % nGrid, jw = (j % nGrid + nGrid) % nGrid, kw = (k % nGrid + nGrid) % nGrid;
+                        #pragma omp atomic
+                        grid(iw, jw, kw) += m(pn) * W;
+                    }
                 }
             }
         }
     }
+    else if (scheme == "TSC") {
+        #pragma omp parallel for
+        for(int pn=0; pn<N; ++pn) {
+            float rx = (r(pn,0) + 0.5f) * nGrid;
+            float ry = (r(pn,1) + 0.5f) * nGrid;
+            float rz = (r(pn,2) + 0.5f) * nGrid;
+            int istart = std::floor(rx - 1.0f);
+            int jstart = std::floor(ry - 1.0f);
+            int kstart = std::floor(rz - 1.0f);
+
+            for (int i = istart; i < istart + 3; ++i) {
+                for (int j = jstart; j < jstart + 3; ++j) {
+                    for (int k = kstart; k < kstart + 3; ++k) {
+                        float W = calc_TSC((i + 0.5f) - rx) * calc_TSC((j + 0.5f) - ry) * calc_TSC((k + 0.5f) - rz);
+                        int iw = (i % nGrid + nGrid) % nGrid, jw = (j % nGrid + nGrid) % nGrid, kw = (k % nGrid + nGrid) % nGrid;
+                        #pragma omp atomic
+                        grid(iw, jw, kw) += m(pn) * W;
+                    }
+                }
+            }
+        }
+    }
+    else if (scheme == "PCS") {
+        #pragma omp parallel for
+        for(int pn=0; pn<N; ++pn) {
+            float rx = (r(pn,0) + 0.5f) * nGrid;
+            float ry = (r(pn,1) + 0.5f) * nGrid;
+            float rz = (r(pn,2) + 0.5f) * nGrid;
+            int istart = std::floor(rx - 1.5f);
+            int jstart = std::floor(ry - 1.5f);
+            int kstart = std::floor(rz - 1.5f);
+
+            for (int i = istart; i < istart + 4; ++i) {
+                for (int j = jstart; j < jstart + 4; ++j) {
+                    for (int k = kstart; k < kstart + 4; ++k) {
+                        float W = calc_PCS((i + 0.5f) - rx) * calc_PCS((j + 0.5f) - ry) * calc_PCS((k + 0.5f) - rz);
+                        int iw = (i % nGrid + nGrid) % nGrid, jw = (j % nGrid + nGrid) % nGrid, kw = (k % nGrid + nGrid) % nGrid;
+                        #pragma omp atomic
+                        grid(iw, jw, kw) += m(pn) * W;
+                    }
+                }
+            }
+        }
+    }
+    else {
+        std::cerr << "wrong scheme" << std::endl;
+        return 1;
+    }
+
 
     auto end_mass = std::chrono::high_resolution_clock::now();
     std::chrono::duration<double> time_mass = end_mass - start_mass;
