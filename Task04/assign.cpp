@@ -10,6 +10,8 @@
 #include "tipsy.h"
 #include "assign.h"
 #include <new>
+#include <complex>
+#include <fftw3.h>
 
 std::chrono::high_resolution_clock::time_point getTime() {
 	return std::chrono::high_resolution_clock::now();
@@ -126,13 +128,41 @@ int main(int argc, char *argv[]) {
     
     size_t total_cells = static_cast<size_t>(nGrid) * nGrid * (nGrid + 2);
     float *grid_data = new (std::align_val_t(64)) float[total_cells]; //512 bits externally 
-    Array<float,3> grid(grid_data, blitz::shape(nGrid, nGrid, nGrid + 2), blitz::deleteDataWhenDone); // defining blitz array with policy 
-    grid = 0.0f; 
-    assignMassToGrid(grid, r, m, N, nGrid, x_min, x_max, y_min, y_max, z_min, z_max, scheme);
+    Array<float,3> grid_padded(grid_data, blitz::shape(nGrid, nGrid, nGrid + 2), blitz::deleteDataWhenDone);// defining blitz array with policy 
+    grid_padded = 0.0f; 
+    Array<float,3> grid_view = grid_padded(blitz::Range::all(), blitz::Range::all(), blitz::Range(0, nGrid - 1));
+
+
+    std::complex<float>* complex_data = reinterpret_cast<std::complex<float>*>(grid_data);
+
+    Array<std::complex<float>, 3> kdata(complex_data, 
+                                        blitz::shape(nGrid, nGrid, nGrid / 2 + 1), 
+                                        blitz::neverDeleteData);
+
+    assignMassToGrid(grid_view, r, m, N, nGrid, x_min, x_max, y_min, y_max, z_min, z_max, scheme);
 
 	endTime = getTime();
 	deltaTime = getDeltaTime(startTime, endTime);
 	std::cout << "Mass assignment took " << std::fixed << std::setprecision(7) << deltaTime << " s" << std::endl;
+
+    // task 4.5
+    startTime = getTime();
+
+    fftwf_plan plan = fftwf_plan_dft_r2c_3d(
+        nGrid, nGrid, nGrid,
+        grid_data,                                           
+        reinterpret_cast<fftwf_complex*>(complex_data),      // Complex output (in-place)
+        FFTW_ESTIMATE                                        // Use ESTIMATE to avoid overwriting data
+    );
+
+    fftwf_execute(plan);
+
+    fftwf_destroy_plan(plan);
+
+    endTime = getTime();
+    deltaTime = getDeltaTime(startTime, endTime);
+    std::cout << "FFT took " << std::fixed << std::setprecision(7) << deltaTime << " s" << std::endl;
+
 
 	startTime = getTime();
 	Array<float,2> projected(nGrid,nGrid);
@@ -140,9 +170,9 @@ int main(int argc, char *argv[]) {
 		for (int j = 0; j < nGrid; j++) {
 			float max_val = __FLT_MIN__;
 			for (int k = 0; k < nGrid; k++) {
-				if (grid(i,j,k) > max_val) {
-					max_val = grid(i,j,k);
-				}
+				if (grid_view(i,j,k) > max_val) {
+                    max_val = grid_view(i,j,k);
+                }
 			}
 			projected(i,j) = max_val;
 		}
