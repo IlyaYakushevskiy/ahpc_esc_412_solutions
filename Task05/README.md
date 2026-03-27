@@ -50,3 +50,5 @@ for (int b = 0; b < n_bins; ++b) {
         }
     }
 ```
+
+![alt text](power_spectrum_log.png)
