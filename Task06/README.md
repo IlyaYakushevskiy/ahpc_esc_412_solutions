@@ -68,3 +68,38 @@ const size_t buffer_size = 8 * 1024 * 1024;
 
 
 ### Exercise 4 
+
+
+- before parallel reading: 
+
+Loading 1000000 particles
+Reading file took 0.0370815 s
+Mass assignment took 0.0642059 s
+FFT and Binning took 2.1329215 s
+power spectrum saved to power_log_NGP_100.txt
+Projection took 0.0003596 s
+
+Loading 1000000000 particles
+Reading file took 31.2307091 s
+Mass assignment took 1.5836211 s
+FFT and Binning took 2.1280789 s
+power spectrum saved to power_log_NGP_100.txt
+Projection took 0.0003158 s
+
+- after parallel reading: 
+
+Loading 1000000 particles
+Reading file took 0.0525139 s
+Mass assignment took 0.0089272 s
+FFT and Binning took 2.1291361 s
+power spectrum saved to power_log_NGP_100.txt
+Projection took 0.0002790 s
+
+Loading 1000000000 particles
+Reading file took 1.6434892 s
+Mass assignment took 1.4932108 s
+FFT and Binning took 2.1366789 s
+power spectrum saved to power_log_NGP_100.txt
+Projection took 0.0002524 s
+
+This is huge difference for the big file! 31sec vs 1sec sec reading difference for B1000. Hovewer we see for the small B100 file serial is  0.0370815 vs parallel 0.0525139, whixh is a bit surprising , perhaps its's cost of threat mangement
