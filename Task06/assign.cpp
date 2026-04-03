@@ -14,6 +14,7 @@
 #include <new>
 #include <complex>
 #include <omp.h> 
+#include <vector>
 
 
 std::chrono::high_resolution_clock::time_point getTime() {
@@ -74,11 +75,18 @@ int main(int argc, char *argv[]) {
 	MAS scheme = (MAS)atoi(argv[3]); // asci to integer
 
 	startTime = getTime();
-	std::ifstream io(argv[1], std::ifstream::binary);
+	const size_t buffer_size = 8 * 1024 * 1024;
+    std::vector<char> io_buffer(buffer_size);
+
+	std::ifstream io;
+
+	io.rdbuf()->pubsetbuf(io_buffer.data(), io_buffer.size());
+	io.open(argv[1], std::ifstream::binary);
+
 	if (!io) {
-		std::cerr << "Unable to open tipsy file " << argv[1] << std::endl;
-		return errno;
-	}
+        std::cerr << "Unable to open tipsy file " << argv[1] << std::endl;
+        return errno;
+    }
 
 	tipsy::header h;
 	if (!io.read(reinterpret_cast<char*>(&h), sizeof(h))) { 
