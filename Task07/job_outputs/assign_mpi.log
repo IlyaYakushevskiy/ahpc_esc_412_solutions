@@ -1,0 +1,13 @@
+Unloading the cpe module is insufficient to restore the system defaults.
+Please run 'source
+/opt/cray/pe/cpe/23.12/restore_lmod_system_defaults.[csh|sh]'. 
+Loading 1000000 particles
+Loading 1000000 particles
+Loading 1000000 particles
+Loading 1000000 particles
+Reading file took 3.7403529 s
+Reading file took 3.7403991 s
+srun: error: nid002236: tasks 0-2: Segmentation fault (core dumped)
+srun: Terminating StepId=7024582.0
+slurmstepd: error: *** STEP 7024582.0 ON nid002236 CANCELLED AT 2026-04-17T12:26:15 ***
+srun: error: nid002236: task 3: Segmentation fault (core dumped)

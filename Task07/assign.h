@@ -118,7 +118,7 @@ void assignMassToGridImpl(Array<float,3>& grid,
 	constexpr int P = Stencil::P;
 
 	#pragma omp parallel for
-	for (int pn = 0; pn < N; ++pn) {
+	for (int pn = r.lbound(0); pn <= r.ubound(0); ++pn) {
 		const float rx = (r(pn, 0) - x_min) / (x_max - x_min) * nGrid;
 		const float ry = (r(pn, 1) - y_min) / (y_max - y_min) * nGrid;
 		const float rz = (r(pn, 2) - z_min) / (z_max - z_min) * nGrid;

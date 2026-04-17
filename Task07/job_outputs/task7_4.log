@@ -1,0 +1,13 @@
+Unloading the cpe module is insufficient to restore the system defaults.
+Please run 'source
+/opt/cray/pe/cpe/23.12/restore_lmod_system_defaults.[csh|sh]'. 
+Loading 1000000 particles
+Loading 1000000 particles
+Loading 1000000 particles
+Loading 1000000 particles
+Reading file took 3.7350380 s
+Reading file took 3.7350883 s
+Mass assignment took 0.0287595 s
+FFT and Binning took 0.1678415 s
+power spectrum saved to power_log_NGP_100.txt
+Projection took 0.0002520 s
