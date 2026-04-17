@@ -7,7 +7,7 @@
 #SBATCH --partition=debug
 #SBATCH --constraint=mc
 #SBATCH --account=uzh8
-#SBATCH --output=job_outputs/task7_4.log
+#SBATCH --output=job_outputs/task7_10.log
 
 
 export OMP_NUM_THREADS=$SLURM_CPUS_PER_TASK

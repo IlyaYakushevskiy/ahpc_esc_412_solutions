@@ -220,7 +220,7 @@ int main(int argc, char *argv[]) {
     MPI_Allgather(&start_int, 1, MPI_INT, rank_start.data(), 1, MPI_INT, MPI_COMM_WORLD);
     MPI_Allgather(&count_int, 1, MPI_INT, rank_count.data(), 1, MPI_INT, MPI_COMM_WORLD);
     // task 7.7
-
+    
     int slice_size = nGrid * (nGrid + 2); // Size of one 2D slice (including padding)
     
     for (int r_target = 0; r_target < size; ++r_target) {
@@ -233,15 +233,17 @@ int main(int argc, char *argv[]) {
         MPI_Reduce(sendbuf, slab_data, reduce_count, MPI_FLOAT, MPI_SUM, r_target, MPI_COMM_WORLD);
     }
 
-    delete[] full_grid_data
+    delete[] full_grid_data;
 
-	float local_mass = blitz::sum(slab_view);
+	
+
+    float local_mass = blitz::sum(slab_view);
     float total_mass = 0.0f;
     MPI_Allreduce(&local_mass, &total_mass, 1, MPI_FLOAT, MPI_SUM, MPI_COMM_WORLD);
         
     float n_grid_cube = static_cast<float>(nGrid * nGrid * nGrid);
 
-    // Loop strictly over our local slab bounds
+    
     for (int i = local_0_start; i < local_0_start + local_n0; i++) {
         for (int j = 0; j < nGrid; j++) {
             for (int k = 0; k < nGrid; k++) {
@@ -257,79 +259,89 @@ int main(int argc, char *argv[]) {
         std::cout << "Mass assignment and distribute took " << std::fixed << std::setprecision(7) << deltaTime << " s" << std::endl;
     }
 
-    // task 4.5
     startTime = getTime();
 
-	//task 6.1 
-
-	if (fftwf_init_threads() == 0) {
+    // task 7.9
+    if (fftwf_init_threads() == 0) {
         std::cerr << "error: fftwf_init_threads failed." << std::endl;
-        return 1;
+        MPI_Abort(MPI_COMM_WORLD, 1);
     }
-	int nthreads = omp_get_max_threads();
+    int nthreads = omp_get_max_threads();
     fftwf_plan_with_nthreads(nthreads);
+    
+    Array<std::complex<float>, 3> kslab(complex_data, 
+                                        blitz::shape(local_n0, nGrid, nGrid / 2 + 1), 
+                                        blitz::neverDeleteData);
+    kslab.reindexSelf(blitz::TinyVector<int, 3>(local_0_start, 0, 0));
 
-    fftwf_plan plan = fftwf_plan_dft_r2c_3d(
+    // use mpi plan 
+    fftwf_plan plan = fftwf_mpi_plan_dft_r2c_3d(
         nGrid, nGrid, nGrid,
-        grid_data,                                           
-        reinterpret_cast<fftwf_complex*>(complex_data),      // Complex output (in-place)
-        FFTW_ESTIMATE                                        // Use ESTIMATE to avoid overwriting data
+        slab_data,                                           
+        reinterpret_cast<fftwf_complex*>(complex_data),      
+        MPI_COMM_WORLD,
+        FFTW_ESTIMATE                                        
     );
 
     fftwf_execute(plan);
 
     fftwf_destroy_plan(plan);
-	fftwf_cleanup_threads();
+    fftwf_cleanup_threads();
 
-	//finding abs(delta(k))
-	//5.2-3 Binning 
+    // task 7.10
+    float k_max = static_cast<float>(nGrid);
+    float log_k_max = std::log(k_max);
+    int n_bins = 80; 
+    
 
-	std::vector<float> fPower(nGrid, 0.0f);
-    std::vector<int> nPower(nGrid, 0);
-	float k_max = static_cast<float>(nGrid);
-	float log_k_max = std::log(k_max);
-	int n_bins = 80; //bring it to kwargs? TODO 
- 
-    float delta_bin = k_max / static_cast<float>(n_bins);
-	std::vector<float> k_sum(n_bins, 0.0f); // solves the bin-center problem
+    std::vector<float> local_fPower(n_bins, 0.0f);
+    std::vector<int> local_nPower(n_bins, 0);
+    std::vector<float> local_k_sum(n_bins, 0.0f); 
+    
+    int iNyquist = nGrid / 2;
 
-	int k_z_max = nGrid / 2;
-	for (int i = 0; i < nGrid; ++i) {
-		int k_x = (i <= nGrid / 2) ? i : i - nGrid;
+    for(auto ii = kslab.begin(); ii != kslab.end(); ++ii) {
+        auto pos = ii.position();
+        auto bin = [iNyquist, nGrid](int k) { return k <= iNyquist ? k : k - nGrid; };
+        
+        auto kx = bin(pos[0]);
+        auto ky = bin(pos[1]);
+        auto kz = pos[2];
 
-        for (int j = 0; j < nGrid; ++j) {
-			int k_y = (j <= nGrid / 2) ? j : j - nGrid;
+        float mag_k = std::sqrt(kx * kx + ky * ky + kz * kz); 
 
-			for (int k = 0; k <= k_z_max; ++k) {
-				int k_z = k; 
-				float mag_k = std::sqrt(k_x * k_x + k_y * k_y + k_z * k_z); // kinda our x axis 
+        if (mag_k > 0.0f) {
+            std::complex<float> delta_k = *ii; 
+            float power = std::norm(delta_k);
 
-				if (mag_k > 0.0f) {
-                    std::complex<float> delta_k = kdata(i, j, k);
-                    float power = std::norm(delta_k);
+            int bin_idx = static_cast<int>((std::log(mag_k) / log_k_max) * n_bins);
 
-					int bin_idx = static_cast<int>((std::log(mag_k) / log_k_max) * n_bins);
+            if (bin_idx >= 0 && bin_idx < n_bins) {
+                local_fPower[bin_idx] += power;
+                local_k_sum[bin_idx] += mag_k; 
+                local_nPower[bin_idx] += 1; 
+            }
+        }
+    }
+            
+   // reduce binc to rank 0 
+    std::vector<float> fPower(n_bins, 0.0f);
+    std::vector<int> nPower(n_bins, 0);
+    std::vector<float> k_sum(n_bins, 0.0f);
 
-						if (bin_idx >= 0 && bin_idx < n_bins) {
-							fPower[bin_idx] += power;
-							k_sum[bin_idx] += mag_k; 
-							nPower[bin_idx] += 1; 
-						}
-					}
-			}
+    MPI_Reduce(local_fPower.data(), fPower.data(), n_bins, MPI_FLOAT, MPI_SUM, 0, MPI_COMM_WORLD);
+    MPI_Reduce(local_k_sum.data(), k_sum.data(), n_bins, MPI_FLOAT, MPI_SUM, 0, MPI_COMM_WORLD);
+    MPI_Reduce(local_nPower.data(), nPower.data(), n_bins, MPI_INT, MPI_SUM, 0, MPI_COMM_WORLD);
 
-		}
-	}
-			
-	
-
+    MPI_Barrier(MPI_COMM_WORLD);
     endTime = getTime();
     deltaTime = getDeltaTime(startTime, endTime);
-    std::cout << "FFT and Binning took " << std::fixed << std::setprecision(7) << deltaTime << " s" << std::endl;
+    if (rank == 0) {
+        std::cout << "FFT and Binning took " << std::fixed << std::setprecision(7) << deltaTime << " s" << std::endl;
+    }
 
-	//write bins to file 
-
-	std::string suffix;
+   //writing to bin files 
+    std::string suffix;
     switch (scheme) {
         case MAS::NGP: suffix = "_NGP"; break;
         case MAS::CIC: suffix = "_CIC"; break;
@@ -337,58 +349,58 @@ int main(int argc, char *argv[]) {
         case MAS::PCS: suffix = "_PCS"; break;
     }
 
-	const std::string pkName = "power_log" + suffix + "_" + std::to_string(nGrid) + ".txt";
-    std::ofstream pkFile(pkName);
-    if (!pkFile) {
-        std::cerr << "error: Could not open file" << std::endl;
-        fftwf_destroy_plan(plan);
-        ::operator delete[](grid_data, std::align_val_t(64));
-        return 1;
-    }
-	for (int b = 0; b < n_bins; ++b) {
-        if (nPower[b] > 0) {
-            float average_power = fPower[b] / static_cast<float>(nPower[b]);
-            
-            float average_k = k_sum[b] / static_cast<float>(nPower[b]);
-            
-            pkFile << average_k << " " << std::scientific << average_power << "\n";
+    if (rank == 0) {
+        const std::string pkName = "power_log" + suffix + "_" + std::to_string(nGrid) + ".txt";
+        std::ofstream pkFile(pkName);
+        if (pkFile) {
+            for (int b = 0; b < n_bins; ++b) {
+                if (nPower[b] > 0) {
+                    float average_power = fPower[b] / static_cast<float>(nPower[b]);
+                    float average_k = k_sum[b] / static_cast<float>(nPower[b]);
+                    pkFile << average_k << " " << std::scientific << average_power << "\n";
+                }
+            }
+            pkFile.close();
+            std::cout << "power spectrum saved to " << pkName << std::endl;
         }
     }
-    pkFile.close();
 
-    std::cout << "power spectrum saved to " << pkName << std::endl;
+    // distributed projection 
+    startTime = getTime();
+    
+    Array<float,2> local_projected(nGrid, nGrid);
+    local_projected = __FLT_MIN__;
 
-	startTime = getTime();
-	Array<float,2> projected(nGrid,nGrid);
-	for (int i = 0; i < nGrid; i++) {
-		for (int j = 0; j < nGrid; j++) {
-			float max_val = __FLT_MIN__;
-			for (int k = 0; k < nGrid; k++) {
-				if (grid_view(i,j,k) > max_val) {
-                    max_val = grid_view(i,j,k);
+    for (int i = local_0_start; i < local_0_start + local_n0; i++) {
+        for (int j = 0; j < nGrid; j++) {
+            float max_val = __FLT_MIN__;
+            for (int k = 0; k < nGrid; k++) {
+                if (slab_view(i,j,k) > max_val) {
+                    max_val = slab_view(i,j,k);
                 }
-			}
-			projected(i,j) = max_val;
-		}
-	}
-	endTime = getTime();
-	deltaTime = getDeltaTime(startTime, endTime);
-	std::cout << "Projection took " << std::fixed << std::setprecision(7) << deltaTime << " s" << std::endl;
+            }
+            local_projected(i,j) = max_val;
+        }
+    }
+    // reducing to get full piccture 
+    Array<float,2> global_projected(nGrid, nGrid);
+    MPI_Reduce(local_projected.data(), global_projected.data(), nGrid * nGrid, MPI_FLOAT, MPI_MAX, 0, MPI_COMM_WORLD);
 
-	const std::string outName =
-	    "density" + suffix + "_" + std::to_string(nGrid) + ".bin";
-	std::ofstream outFile(outName, std::ios::binary);
-	if (!outFile) {
-		std::cerr << "Error: Could not open file for writing." << std::endl;
-		return 1;
-	}
+    MPI_Barrier(MPI_COMM_WORLD);
+    endTime = getTime();
+    deltaTime = getDeltaTime(startTime, endTime);
+    
+    if (rank == 0) {
+        std::cout << "Projection took " << std::fixed << std::setprecision(7) << deltaTime << " s" << std::endl;
 
-    outFile.write(reinterpret_cast<const char*>(&nGrid), sizeof(nGrid));
-    outFile.write(reinterpret_cast<const char*>(projected.data()), nGrid * nGrid * sizeof(float));
-        
-
+        const std::string outName = "density" + suffix + "_" + std::to_string(nGrid) + ".bin";
+        std::ofstream outFile(outName, std::ios::binary);
+        if (outFile) {
+            outFile.write(reinterpret_cast<const char*>(&nGrid), sizeof(nGrid));
+            outFile.write(reinterpret_cast<const char*>(global_projected.data()), nGrid * nGrid * sizeof(float));
+        }
+    }
 
     MPI_Finalize();
     return 0;
-
 }

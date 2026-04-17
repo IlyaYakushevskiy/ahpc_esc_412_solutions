@@ -1,0 +1,18 @@
+Unloading the cpe module is insufficient to restore the system defaults.
+Please run 'source
+/opt/cray/pe/cpe/23.12/restore_lmod_system_defaults.[csh|sh]'. 
+Loading 1000000 particles
+Loading 1000000 particles
+Loading 1000000 particles
+Loading 1000000 particles
+Reading file took 3.5600865 s
+Reading file took 3.5601358 s
+Mass assignment and distribute took 0.0257190 s
+FFT and Binning took 0.0270346 s
+power spectrum saved to power_log_NGP_100.txt
+Projection took 0.0001330 s
+corrupted size vs. prev_size in fastbins
+corrupted double-linked list
+srun: error: nid002238: tasks 0,2: Aborted (core dumped)
+srun: Terminating StepId=7024786.0
+srun: error: nid002238: task 3: Segmentation fault (core dumped)
