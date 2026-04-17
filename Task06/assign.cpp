@@ -14,6 +14,7 @@
 #include <new>
 #include <complex>
 #include <omp.h> 
+#include <vector>
 
 
 std::chrono::high_resolution_clock::time_point getTime() {
@@ -73,55 +74,94 @@ int main(int argc, char *argv[]) {
 	int nGrid = atoi(argv[2]);
 	MAS scheme = (MAS)atoi(argv[3]); // asci to integer
 
+	//task 6.4
 	startTime = getTime();
-	std::ifstream io(argv[1], std::ifstream::binary);
-	if (!io) {
-		std::cerr << "Unable to open tipsy file " << argv[1] << std::endl;
-		return errno;
-	}
+	std::ifstream header_io(argv[1], std::ifstream::binary);
+    if (!header_io) {
+        std::cerr << "Unable to open tipsy file " << argv[1] << std::endl;
+        return errno;
+    }
 
-	tipsy::header h;
-	if (!io.read(reinterpret_cast<char*>(&h), sizeof(h))) { 
-		std::cerr << "error reading header" << std::endl;
-		return errno;
-	}
-	tipsy::swap(h);
+    tipsy::header h;
+    if (!header_io.read(reinterpret_cast<char*>(&h), sizeof(h))) { 
+        std::cerr << "error reading header" << std::endl;
+        return errno;
+    }
+    tipsy::swap(h);
+    header_io.close();
 
-	std::uint64_t N = h.nDark;
-	std::cerr << "Loading " << N << " particles" << std::endl;
-	Array<float,2> r(N,3);
-	Array<float,1> m(N);
+    std::uint64_t N = h.nDark;
+    std::cerr << "Loading " << N << " particles" << std::endl;
+    Array<float,2> r(N,3);
+    Array<float,1> m(N);
 
-	tipsy::dark d;
-	float x_min = __FLT_MAX__;
-	float y_min = __FLT_MAX__;
-	float z_min = __FLT_MAX__;
-	float x_max = -__FLT_MAX__;
-	float y_max = -__FLT_MAX__;
-	float z_max = -__FLT_MAX__;
 
-	for (int i = 0; i < N; ++i) {
-		if (!io.read(reinterpret_cast<char*>(&d), sizeof(d))) {
-			std::cerr << "error reading particle" << std::endl;
-			return errno;
-		}
-		tipsy::swap(d);
+    float x_min = __FLT_MAX__, y_min = __FLT_MAX__, z_min = __FLT_MAX__;
+    float x_max = -__FLT_MAX__, y_max = -__FLT_MAX__, z_max = -__FLT_MAX__;
 
-		r(i,0) = d.pos[0];
-		r(i,1) = d.pos[1];
-		r(i,2) = d.pos[2];
 
-		if (d.pos[0] < x_min) x_min = d.pos[0];
-		if (d.pos[1] < y_min) y_min = d.pos[1];
-		if (d.pos[2] < z_min) z_min = d.pos[2];
-		if (d.pos[0] > x_max) x_max = d.pos[0];
-		if (d.pos[1] > y_max) y_max = d.pos[1];
-		if (d.pos[2] > z_max) z_max = d.pos[2];
+    #pragma omp parallel
+    {
+        int num_threads = omp_get_num_threads();
+        int thread_num = omp_get_thread_num();
 
-		m(i) = d.mass;
-	}
+        std::uint64_t chunk_size = N / num_threads;
+        std::uint64_t remainder = N % num_threads;
 
-	endTime = getTime();
+        std::uint64_t local_count = chunk_size + (thread_num < remainder ? 1 : 0);
+        std::uint64_t start_idx = thread_num * chunk_size + std::min(static_cast<std::uint64_t>(thread_num), remainder);
+
+        if (local_count > 0) {
+            std::ifstream local_io(argv[1], std::ifstream::binary);
+            std::streamoff header_size = sizeof(tipsy::header);
+            std::streamoff particle_size = sizeof(tipsy::dark);
+            
+            std::streamoff offset = header_size + static_cast<std::streamoff>(start_idx) * particle_size;
+            
+            local_io.seekg(offset, std::ios::beg);
+
+            float local_xmin = __FLT_MAX__, local_ymin = __FLT_MAX__, local_zmin = __FLT_MAX__;
+            float local_xmax = -__FLT_MAX__, local_ymax = -__FLT_MAX__, local_zmax = -__FLT_MAX__;
+
+            tipsy::dark d;
+        
+            for (std::uint64_t i = 0; i < local_count; ++i) {
+                local_io.read(reinterpret_cast<char*>(&d), sizeof(d));
+                tipsy::swap(d);
+
+                std::uint64_t global_idx = start_idx + i;
+                int blitz_idx = static_cast<int>(global_idx);
+                
+                r(blitz_idx,0) = d.pos[0];
+                r(blitz_idx,1) = d.pos[1];
+                r(blitz_idx,2) = d.pos[2];
+                m(blitz_idx) = d.mass;
+
+                if (d.pos[0] < local_xmin) local_xmin = d.pos[0];
+                if (d.pos[1] < local_ymin) local_ymin = d.pos[1];
+                if (d.pos[2] < local_zmin) local_zmin = d.pos[2];
+                if (d.pos[0] > local_xmax) local_xmax = d.pos[0];
+                if (d.pos[1] > local_ymax) local_ymax = d.pos[1];
+                if (d.pos[2] > local_zmax) local_zmax = d.pos[2];
+            }
+            local_io.close();
+
+            #pragma omp critical
+            {
+                if (local_xmin < x_min) x_min = local_xmin;
+                if (local_ymin < y_min) y_min = local_ymin;
+                if (local_zmin < z_min) z_min = local_zmin;
+                if (local_xmax > x_max) x_max = local_xmax;
+                if (local_ymax > y_max) y_max = local_ymax;
+                if (local_zmax > z_max) z_max = local_zmax;
+            }
+        }
+    }
+
+    endTime = getTime();
+	
+
+
 	deltaTime = getDeltaTime(startTime, endTime);
 	std::cout << "Reading file took " << std::fixed << std::setprecision(7) << deltaTime << " s" << std::endl;
 
