@@ -57,3 +57,9 @@ done
 done 
 ## Exercise 8
 done 
+## Exercise 9
+done 
+## Exercise 10
+done 
+
+however I couldn't debug segmentation fault 

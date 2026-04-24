@@ -17,6 +17,7 @@
 #include "aweights.h"
 #include <algorithm>
 #include <cmath>
+#include <numeric>
 
 using namespace blitz;
 using hrc = std::chrono::high_resolution_clock;
@@ -167,18 +168,105 @@ int main(int argc, char *argv[]) {
 
     ParticleData* p_data = reinterpret_cast<ParticleData*>(r_m.data());
 
-    auto compare_particles = [nGrid, &slab_to_rank](const ParticleData& p1, const ParticleData& p2) {
-        auto get_target_rank = [nGrid, &slab_to_rank](float x) {
-            int start_slab = static_cast<int>(std::floor(x * nGrid)); 
-            if (start_slab < 0) start_slab += nGrid;
-            else if (start_slab >= nGrid) start_slab -= nGrid;
-            return slab_to_rank(start_slab);
-        };
+    auto get_target_rank = [nGrid, &slab_to_rank](float x) {
+        int start_slab = static_cast<int>(std::floor(x * nGrid)); 
+        if (start_slab < 0) start_slab += nGrid;
+        else if (start_slab >= nGrid) start_slab -= nGrid;
+        return slab_to_rank(start_slab);
+    };
+
+    auto compare_particles = [&get_target_rank](const ParticleData& p1, const ParticleData& p2) {
         return get_target_rank(p1.x) < get_target_rank(p2.x); 
     };
 
     std::sort(p_data, p_data + local_count, compare_particles);
 
+    //task 8.4 
+
+    Array<int, 1> scounts(nrank);
+    scounts = 0; 
+
+    for (int i = 0; i < local_count; ++i) {
+        int target = get_target_rank(p_data[i].x);
+        scounts(target)++;
+    }
+    if (irank == 0) {
+        std::cerr << "scounts: ";
+        for (int r = 0; r < nrank; ++r) {
+            std::cerr << scounts(r) << " ";
+        }
+        std::cerr << std::endl;
+    }
+
+    //task 8.4
+
+    Array<int, 1> soffset(nrank);
+    std::exclusive_scan(scounts.data(), scounts.data() + nrank, soffset.data(), 0);
+    // if (irank == 0) {
+    //     std::cerr << "rank 0 scounts: ";
+    //     for (int r = 0; r < nrank; ++r) std::cerr << scounts(r) << " ";
+    //     std::cerr << "rank 0 soffset: ";
+    //     for (int r = 0; r < nrank; ++r) std::cerr << soffset(r) << " ";
+    //     std::cerr << std::endl;
+    // }
+
+    //task 8.5
+    for (int r = 0; r < nrank; ++r) {
+        for (int i = 0; i < scounts(r); ++i) {
+            int p_idx = soffset(r) + i;
+            int actual_target = get_target_rank(p_data[p_idx].x);
+            
+            if (actual_target != r) {
+                std::cerr << " error on Rank " << irank 
+                          << ": Particle at memory index " << p_idx 
+                          << " belongs to rank " << actual_target 
+                          << ", but is sorted into the offset block for rank " << r << "!" 
+                          << std::endl;
+                MPI_Abort(MPI_COMM_WORLD, 1);
+            }
+        }
+    }
+
+    if (irank == 0) {
+        std::cerr << "particle sorting and memory offsets verified successfully." << std::endl;
+    }
+
+    //task 8.6
+
+    Array<int, 1> rcounts(nrank);
+
+    
+    MPI_Alltoall(scounts.data(), 1, MPI_INT, 
+                 rcounts.data(), 1, MPI_INT, MPI_COMM_WORLD);
+
+    Array<int, 1> roffset(nrank);
+
+    std::exclusive_scan(rcounts.data(), rcounts.data() + nrank, roffset.data(), 0);
+
+    //task 8.7 
+    int total_recv_count = blitz::sum(rcounts);
+
+    Array<float, 2> r_m2(total_recv_count, 4);
+    Array<float, 2> r2 = r_m2(Range::all(), Range(0, 2));
+    Array<float, 1> m2 = r_m2(Range::all(), 3);
+    Array<int, 1> scounts_float(nrank), soffset_float(nrank);
+    Array<int, 1> rcounts_float(nrank), roffset_float(nrank);
+    
+    for(int r = 0; r < nrank; ++r) {
+        scounts_float(r) = scounts(r) * 4;
+        soffset_float(r) = soffset(r) * 4;
+        rcounts_float(r) = rcounts(r) * 4;
+        roffset_float(r) = roffset(r) * 4;
+    }
+    MPI_Alltoallv(r_m.data(), scounts_float.data(), soffset_float.data(), MPI_FLOAT,
+                  r_m2.data(), rcounts_float.data(), roffset_float.data(), MPI_FLOAT,
+                  MPI_COMM_WORLD);
+                  
+    if (irank == 0) {
+        std::cerr << "Particle exchange complete." << std::endl;
+    }
+
+    
    // Mass assignment
     t0 = hrc::now();
 
