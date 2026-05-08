@@ -24,14 +24,14 @@ using duration = std::chrono::duration<double>;
 // A separate version is created for each different "Order".
 // This allows the compiler to optimize the process for each of the four orders
 template<int Order=1>
-void assign_mass(Array<float,3> &grid, Array<float,2> &R,Array<float,1> &M) {
-    auto nGrid = grid.rows(); // total number of particles
-    // C++ Lambda to apply the periodic wrap of the grid index
-    auto wrap = [nGrid](int i) {
+void assign_mass(Array<float,3> &local_ghost, Array<float,2> &R, Array<float,1> &M, int nGrid) {
+    // Isolate periodic wrapping to non-distributed dimensions
+    auto wrap_yz = [nGrid](int i) {
         if (i<0) i+=nGrid;
         else if (i>=nGrid) i-=nGrid;
         return i;
     };
+    
     #pragma omp parallel for
     for(int pn=R.lbound(0); pn<=R.ubound(0); ++pn) {
         float x = R(pn,0);
@@ -39,11 +39,16 @@ void assign_mass(Array<float,3> &grid, Array<float,2> &R,Array<float,1> &M) {
         float z = R(pn,2);
         float m = M(pn);
         AssignmentWeights<Order,float> Hx((x+0.5f)*nGrid),Hy((y+0.5f)*nGrid),Hz((z+0.5f)*nGrid);
+        
         for(auto i=0; i<Order; ++i) {
             for(auto j=0; j<Order; ++j) {
                 for(auto k=0; k<Order; ++k) {
+                    int ix = Hx.i+i; // X remains linear to hit ghost indices (e.g., -1)
+                    int iy = wrap_yz(Hy.i+j);
+                    int iz = wrap_yz(Hz.i+k);
+                    
                     #pragma omp atomic
-                    grid(wrap(Hx.i+i),wrap(Hy.i+j),wrap(Hz.i+k)) += m * Hx.H[i]*Hy.H[j]*Hz.H[k];
+                    local_ghost(ix, iy, iz) += m * Hx.H[i]*Hy.H[j]*Hz.H[k];
                 }
             }
         }
@@ -259,15 +264,21 @@ int main(int argc, char *argv[]) {
     // Create Mass Assignment Grid
     t0 = hrc::now();
 
-    auto n_floats = size_t(1) * nGrid * nGrid * 2*k_nz; // Careful. For odd nGrid 2*k_nz != nGrid + 2
-    float *data = new (std:: align_val_t (64)) float [n_floats]; // 512-bit alignment
-    Array<float,3> raw_grid(data,shape(nGrid,nGrid,2*k_nz),deleteDataWhenDone);
-    Array<float,3> grid(raw_grid(Range(0,nGrid-1),Range(0,nGrid-1),Range(0,nGrid-1)));
+    raw_slab = 0.0f; 
 
-    Array <std::complex<float>,3> kgrid(reinterpret_cast<std::complex<float>*>(data),shape(nGrid,nGrid,k_nz),neverDeleteData);
+    if (irank==0) std::cerr << "Assigning mass to ghost using order " << iOrder <<std::endl;
+    switch(iOrder) {
+        case 1: assign_mass<1>(ghost, r2, m2, nGrid); break;
+        case 2: assign_mass<2>(ghost, r2, m2, nGrid); break;
+        case 3: assign_mass<3>(ghost, r2, m2, nGrid); break;
+        case 4: assign_mass<4>(ghost, r2, m2, nGrid); break;
+        default: std::cerr << "Invalid order " << iOrder << std::endl;
+    }
 
-    // Assign the mass to the grid
-    raw_grid = 0;
+    // Measure mass strictly on the interior unpadded domain
+    float local_mass = blitz::sum(slab);
+    float total_mass;
+    MPI_Allreduce(&local_mass, &total_mass, 1, MPI_FLOAT, MPI_SUM, MPI_COMM_WORLD);
 
     // This creates four different versions of "assign mass", one for each order
     if (irank==0) std::cerr << "Assigning mass to the grid using order " << iOrder <<std::endl;

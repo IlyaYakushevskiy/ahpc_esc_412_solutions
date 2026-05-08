@@ -40,6 +40,14 @@ I've then implemented a testing code in my main and ran it on euler.
 And tested with srun ./assign $SCRATCH/B100.00100 100 3 
 # Exercise 2 
 
+In this commit I:
+
+1) Removed the old global grid and kgrid memory allocations with the  MPI_Reduce step, to eliminate the memory bottleneck.
+
+2) changed  mass assignment function to project particle mass directly into the distributed, localized ghost array.
+
+3) changed the coordinate wrapping logic during assignment so boundary particles correctly project into the extended negative/positive parts of the local ghost memory
+
 # Exercise 3
 
 # Exercise 4 
